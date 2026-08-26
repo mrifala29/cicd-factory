@@ -1,0 +1,15 @@
+stages:
+  - check
+  - build
+  - deploy
+  - verify
+
+variables:
+  IMAGE_NAME: "$CI_REGISTRY_IMAGE"
+  DOCKER_TLS_CERTDIR: ""
+
+include:
+  - local: ".gitlab/ci/security.yml"
+  - local: ".gitlab/ci/build.yml"
+  - local: ".gitlab/ci/deploy.yml"
+  - local: ".gitlab/ci/verify.yml"

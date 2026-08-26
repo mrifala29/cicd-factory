@@ -1,0 +1,17 @@
+# Credentials
+.env
+
+# Cloned projects
+project/
+
+# macOS
+.DS_Store
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# Logs
+*.log

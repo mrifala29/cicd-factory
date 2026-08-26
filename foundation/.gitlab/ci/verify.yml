@@ -1,0 +1,125 @@
+# ============================================================
+# VERIFY
+# ============================================================
+
+.verify_template:
+  stage: verify
+
+  image: alpine:latest
+
+  before_script:
+    - apk add --no-cache openssh-client sshpass
+
+
+verify_dev:
+  extends: .verify_template
+
+  script:
+    - |
+      sshpass -p "$DEV_PASSWORD" ssh \
+        -o StrictHostKeyChecking=no \
+        "$DEV_USER@$DEV_HOST" '
+
+        cd $PROJECT_DIR
+
+        echo ""
+        echo "============================================================"
+        echo "              POST-DEPLOYMENT VERIFY"
+        echo "              ENVIRONMENT: DEVELOPMENT"
+        echo "============================================================"
+        echo ""
+
+        CONTAINERS=$(docker compose ps -q)
+
+        if [ -z "$CONTAINERS" ]; then
+          echo "VERIFY RESULT : FAILED"
+          echo "DETAIL        : No containers found."
+          exit 1
+        fi
+
+        FAILED=0
+        TOTAL=0
+        RUNNING=0
+        HEALTHY=0
+        UNHEALTHY=0
+        NO_HEALTHCHECK=0
+
+        printf "%-35s %-12s %-18s\n" \
+          "CONTAINER" "STATUS" "HEALTH"
+
+        echo "------------------------------------------------------------------"
+
+        for CONTAINER in $CONTAINERS; do
+
+          TOTAL=$((TOTAL + 1))
+
+          NAME=$(docker inspect \
+            --format "{{.Name}}" \
+            "$CONTAINER" | sed "s#^/##")
+
+          STATUS=$(docker inspect \
+            --format "{{.State.Status}}" \
+            "$CONTAINER")
+
+          HEALTH=$(docker inspect \
+            --format "{{if .State.Health}}{{.State.Health.Status}}{{else}}no-healthcheck{{end}}" \
+            "$CONTAINER")
+
+          printf "%-35s %-12s %-18s\n" \
+            "$NAME" \
+            "$STATUS" \
+            "$HEALTH"
+
+          if [ "$STATUS" = "running" ]; then
+            RUNNING=$((RUNNING + 1))
+          else
+            FAILED=1
+          fi
+
+          if [ "$HEALTH" = "healthy" ]; then
+            HEALTHY=$((HEALTHY + 1))
+
+          elif [ "$HEALTH" = "unhealthy" ]; then
+            UNHEALTHY=$((UNHEALTHY + 1))
+            FAILED=1
+
+          elif [ "$HEALTH" = "no-healthcheck" ]; then
+            NO_HEALTHCHECK=$((NO_HEALTHCHECK + 1))
+          fi
+
+        done
+
+        echo ""
+        echo "============================================================"
+        echo "                    VERIFY SUMMARY"
+        echo "============================================================"
+
+        echo "Containers : $TOTAL"
+        echo "Running    : $RUNNING"
+        echo "Healthy    : $HEALTHY"
+        echo "Unhealthy  : $UNHEALTHY"
+        echo "No Check   : $NO_HEALTHCHECK"
+
+        echo "------------------------------------------------------------------"
+
+        if [ "$FAILED" -ne 0 ]; then
+
+          echo "VERIFY : FAILED"
+          echo "ACTION : Deployment requires investigation."
+
+          echo "============================================================"
+
+          exit 1
+
+        fi
+
+        echo "VERIFY : PASSED"
+        echo "ACTION : All containers are running normally."
+
+        echo "============================================================"
+        echo ""
+
+      '
+
+  only:
+    - dev

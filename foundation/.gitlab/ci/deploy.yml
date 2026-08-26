@@ -1,0 +1,49 @@
+# ============================================================
+# DEPLOY
+# ============================================================
+
+.deploy_template:
+  stage: deploy
+
+  image: alpine:latest
+
+  before_script:
+    - apk add --no-cache openssh-client sshpass
+
+
+deploy_dev:
+  extends: .deploy_template
+
+  script:
+    - |
+      echo ""
+      echo "============================================================"
+      echo "                   DEPLOY - DEVELOPMENT"
+      echo "============================================================"
+      echo ""
+
+      sshpass -p "$DEV_PASSWORD" ssh \
+        -o StrictHostKeyChecking=no \
+        "$DEV_USER@$DEV_HOST" "
+
+        docker login $CI_REGISTRY \
+          -u root \
+          -p '$REGISTRY_TOKEN' &&
+
+        cd $PROJECT_DIR &&
+
+        docker pull $IMAGE_NAME:dev &&
+
+        IMAGE_TAG=dev docker compose up -d
+
+      "
+
+      echo ""
+      echo "DEPLOY RESULT : SUCCESS"
+      echo "ENVIRONMENT   : DEVELOPMENT"
+      echo "IMAGE         : $IMAGE_NAME:dev"
+      echo "============================================================"
+      echo ""
+
+  only:
+    - dev

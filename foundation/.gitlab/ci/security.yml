@@ -1,0 +1,306 @@
+# ============================================================
+# SECURITY / CODE QUALITY CHECKS
+# ============================================================
+
+check_secret:
+  stage: check
+
+  image:
+    name: zricethezav/gitleaks:latest
+    entrypoint: [""]
+
+  script:
+    - |
+      mkdir -p artifacts/gitleaks
+
+      echo ""
+      echo "============================================================"
+      echo "                 SECURITY CHECK - GITLEAKS"
+      echo "============================================================"
+      echo ""
+
+      gitleaks detect \
+        --source . \
+        --verbose \
+        --report-format json \
+        --report-path artifacts/gitleaks/report.json \
+        > artifacts/gitleaks/report.md 2>&1 || true
+
+      cat artifacts/gitleaks/report.md
+
+      echo ""
+      echo "------------------------------------------------------------"
+
+      if [ ! -s artifacts/gitleaks/report.json ] || \
+         [ "$(cat artifacts/gitleaks/report.json)" = "[]" ]; then
+
+        RESULT="PASS"
+        DETAIL="No secrets or credentials detected."
+        FINDINGS=0
+
+      else
+
+        RESULT="REVIEW"
+        DETAIL="Potential secret findings may require review."
+        FINDINGS=$(grep -o '"RuleID"' artifacts/gitleaks/report.json | wc -l)
+
+      fi
+
+      echo "RESULT  : $RESULT"
+      echo "DETAIL  : $DETAIL"
+      echo "FINDINGS: $FINDINGS"
+
+      echo ""
+      echo "NOTE   : This check is informational and does not block"
+      echo "         the pipeline."
+      echo "============================================================"
+      echo ""
+
+      cat > artifacts/gitleaks/summary.json <<EOF
+      {
+        "check": "gitleaks",
+        "result": "$RESULT",
+        "findings": $FINDINGS,
+        "detail": "$DETAIL"
+      }
+      EOF
+
+  artifacts:
+    when: always
+    expire_in: 30 days
+    paths:
+      - artifacts/gitleaks/
+
+
+# ============================================================
+# TRIVY
+# ============================================================
+
+check_dependency:
+  stage: check
+
+  image:
+    name: aquasec/trivy:latest
+    entrypoint: [""]
+
+  script:
+    - |
+      mkdir -p artifacts/trivy
+
+      echo ""
+      echo "============================================================"
+      echo "             SECURITY CHECK - TRIVY"
+      echo "============================================================"
+      echo ""
+
+      OUTPUT=$(mktemp)
+
+      trivy fs \
+        --scanners vuln \
+        --severity HIGH,CRITICAL \
+        --exit-code 0 \
+        . > "$OUTPUT" 2>&1 || true
+
+      cat "$OUTPUT"
+
+      echo ""
+      echo "------------------------------------------------------------"
+
+      if grep -q "Total: 0" "$OUTPUT"; then
+        RESULT="PASS"
+        DETAIL="No HIGH/CRITICAL vulnerabilities detected."
+      else
+        RESULT="REVIEW"
+        DETAIL="HIGH/CRITICAL vulnerability findings may exist."
+      fi
+
+      echo "RESULT : $RESULT"
+      echo "DETAIL : $DETAIL"
+
+      echo ""
+      echo "NOTE   : This check is informational and does not block"
+      echo "         the pipeline."
+      echo "============================================================"
+      echo ""
+
+      # --------------------------------------------------------
+      # Generate clean Markdown report
+      # Only keep the actual vulnerability report.
+      # Remove Trivy startup/download/VEX logs.
+      # --------------------------------------------------------
+
+      sed -n '/Report Summary/,$p' "$OUTPUT" \
+        | sed '/For OSS Maintainers: VEX Notice/,/^$/d' \
+        > artifacts/trivy/report.md
+
+      # Fallback if no vulnerability report was found
+      if [ ! -s artifacts/trivy/report.md ]; then
+        echo "# Trivy Security Report" > artifacts/trivy/report.md
+        echo "" >> artifacts/trivy/report.md
+        echo "No HIGH/CRITICAL vulnerabilities detected." >> artifacts/trivy/report.md
+      fi
+
+      # --------------------------------------------------------
+      # JSON report
+      # --------------------------------------------------------
+
+      trivy fs \
+        --scanners vuln \
+        --severity HIGH,CRITICAL \
+        --format json \
+        --output artifacts/trivy/report.json \
+        . || true
+
+      # --------------------------------------------------------
+      # Summary
+      # --------------------------------------------------------
+
+      cat > artifacts/trivy/summary.json <<EOF
+      {
+        "check": "trivy",
+        "result": "$RESULT",
+        "detail": "$DETAIL"
+      }
+      EOF
+
+  artifacts:
+    when: always
+    expire_in: 30 days
+    paths:
+      - artifacts/trivy/
+
+
+# ============================================================
+# HADOLINT
+# ============================================================
+
+check_dockerfile:
+  stage: check
+
+  image:
+    name: hadolint/hadolint:latest-debian
+    entrypoint: [""]
+
+  script:
+    - |
+      mkdir -p artifacts/hadolint
+
+      echo ""
+      echo "============================================================"
+      echo "              CODE QUALITY - HADOLINT"
+      echo "============================================================"
+      echo ""
+
+      OUTPUT=$(mktemp)
+
+      hadolint Dockerfile \
+        > "$OUTPUT" 2>&1 || true
+
+      if [ -s "$OUTPUT" ]; then
+
+        cat "$OUTPUT"
+
+        echo ""
+        echo "------------------------------------------------------------"
+
+        RESULT="REVIEW"
+        DETAIL="Dockerfile lint findings detected."
+
+        echo "RESULT : $RESULT"
+        echo "DETAIL : $DETAIL"
+
+      else
+
+        RESULT="PASS"
+        DETAIL="No Dockerfile lint findings detected."
+
+        echo "RESULT : $RESULT"
+        echo "DETAIL : $DETAIL"
+
+      fi
+
+      echo ""
+      echo "NOTE   : This check is informational and does not block"
+      echo "         the pipeline."
+      echo "============================================================"
+      echo ""
+
+      cp "$OUTPUT" artifacts/hadolint/report.md
+
+      hadolint \
+        -f json \
+        Dockerfile \
+        > artifacts/hadolint/report.json 2>/dev/null || true
+
+      if [ ! -s artifacts/hadolint/report.json ]; then
+        echo "[]" > artifacts/hadolint/report.json
+      fi
+
+      FINDINGS=$(grep -c '"code"' artifacts/hadolint/report.json 2>/dev/null || true)
+
+      cat > artifacts/hadolint/summary.json <<EOF
+      {
+        "check": "hadolint",
+        "result": "$RESULT",
+        "findings": $FINDINGS,
+        "detail": "$DETAIL"
+      }
+      EOF
+
+  artifacts:
+    when: always
+    expire_in: 30 days
+    paths:
+      - artifacts/hadolint/
+
+
+# ============================================================
+# SECURITY REPORT
+# ============================================================
+
+security_report:
+  stage: check
+
+  image: alpine:latest
+
+  needs:
+    - job: check_secret
+      artifacts: true
+
+    - job: check_dependency
+      artifacts: true
+
+    - job: check_dockerfile
+      artifacts: true
+
+  script:
+    - |
+      echo ""
+      echo "============================================================"
+      echo "                 SECURITY REPORT"
+      echo "============================================================"
+      echo ""
+
+      echo "Gitleaks:"
+      cat artifacts/gitleaks/summary.json
+      echo ""
+
+      echo "Trivy:"
+      cat artifacts/trivy/summary.json
+      echo ""
+
+      echo "Hadolint:"
+      cat artifacts/hadolint/summary.json
+      echo ""
+
+      echo "============================================================"
+      echo "             SECURITY REPORT GENERATED"
+      echo "============================================================"
+      echo ""
+
+  artifacts:
+    when: always
+    expire_in: 30 days
+    name: "security-report-$CI_COMMIT_SHORT_SHA"
+    paths:
+      - artifacts/
