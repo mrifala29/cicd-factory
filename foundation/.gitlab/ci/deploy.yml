@@ -34,7 +34,7 @@ deploy_dev:
 
         docker pull $IMAGE_NAME:dev &&
 
-        IMAGE_TAG=dev docker compose up -d
+        IMAGE_NAME=$IMAGE_NAME IMAGE_TAG=dev docker compose up -d
 
       "
 

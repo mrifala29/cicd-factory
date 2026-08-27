@@ -20,7 +20,7 @@ verify_dev:
         -o StrictHostKeyChecking=no \
         "$DEV_USER@$DEV_HOST" '
 
-        cd $PROJECT_DIR
+        cd '"$PROJECT_DIR"'
 
         echo ""
         echo "============================================================"

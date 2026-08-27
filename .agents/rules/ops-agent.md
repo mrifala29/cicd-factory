@@ -23,7 +23,7 @@ description: Core rules for CI/CD factory project operations
 ## Security
 - NEVER print or expose `.env` contents to output/artifacts.
 - Use `sshpass` for SSH/SCP automation with password from `.env`.
-- When cloning GitLab, use format: `http://GITLAB_USERNAME:GITLAB_PASS@host/path/repo.git`.
+- When cloning GitLab, try without credentials first. If auth fails, use format: `http://GITLAB_USERNAME:GITLAB_PASS@host/path/repo.git`.
 
 ## Port Management
 - Dev server hosts many applications. Ports MUST NOT collide.

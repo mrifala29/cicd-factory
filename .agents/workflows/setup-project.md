@@ -21,12 +21,14 @@ Read `.env` from workspace root to get `GITLAB_USERNAME` and `GITLAB_PASS`.
 ### 2. Clone Repository
 Extract the repo URL from user input. Clone into `project/` directory:
 ```bash
-cd /Users/alfarizy/Desktop/Project/cicd-factory/project
-git clone http://${GITLAB_USERNAME}:${GITLAB_PASS}@<host>/<path>/<repo>.git
+git clone http://<host>/<group>/<repo>.git
 ```
-- Parse the user-provided URL to extract host/path/repo.
-- If URL is HTTPS, strip the protocol and inject credentials.
-- If URL is SSH (git@), convert to HTTP format with credentials.
+Run from `/Users/alfarizy/Desktop/Project/cicd-factory/project`.
+
+- Parse the user-provided URL to extract host/group/repo.
+- Strip trailing slashes and `.git` suffix if present.
+- Try clone without credentials first.
+- If auth fails, read `.env` for `GITLAB_USERNAME` and `GITLAB_PASS`, retry with credentials.
 
 ### 3. Check Port Availability
 Before creating server files, run `/check-ports` workflow to check used ports on the server.
@@ -61,5 +63,5 @@ Report what was done:
 - `server.env` created
 - Remind user to:
   - Set CI/CD variables in GitLab UI
-  - Run `/deploy-server` to push files to the server
-  - Push the CI/CD files to the repo
+  - Run `/deploy-server` to push server files to the dev server
+  - Run `/push-cicd` to push the CI/CD configuration to GitLab

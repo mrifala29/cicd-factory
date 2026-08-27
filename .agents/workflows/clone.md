@@ -7,27 +7,28 @@ slash_command: clone
 
 # /clone — Clone GitLab Repository
 
-Clone a GitLab repository using stored credentials.
+Clone a GitLab repository into the `project/` directory.
 
 ## Prerequisites
 - User provides the GitLab repo URL.
-- `.env` has `GITLAB_USERNAME` and `GITLAB_PASS`.
+- If repo is private, `.env` must have `GITLAB_USERNAME` and `GITLAB_PASS`.
 
 ## Steps
 
-### 1. Read Credentials
-Read `.env` from workspace root.
+### 1. Parse URL
+Extract host, group, and repo name from the user-provided URL.
+- Strip trailing slashes and `.git` suffix if present.
+- Normalize to HTTP format: `http://<host>/<group>/<repo>.git`
 
-### 2. Parse URL
-Convert the user-provided URL to authenticated HTTP format:
-- Input: `http://gitlab.example.com/group/repo.git` or `git@gitlab.example.com:group/repo.git`
-- Output: `http://${GITLAB_USERNAME}:${GITLAB_PASS}@gitlab.example.com/group/repo.git`
-
-### 3. Clone
+### 2. Clone
 ```bash
-cd /Users/alfarizy/Desktop/Project/cicd-factory/project
-git clone <authenticated-url>
+git clone http://<host>/<group>/<repo>.git
 ```
+Run from `/Users/alfarizy/Desktop/Project/cicd-factory/project`.
 
-### 4. Confirm
+If clone fails with authentication error:
+- Read `.env` to get `GITLAB_USERNAME` and `GITLAB_PASS`.
+- Retry with credentials: `http://${GITLAB_USERNAME}:${GITLAB_PASS}@<host>/<group>/<repo>.git`
+
+### 3. Confirm
 List the cloned directory contents and report success.
