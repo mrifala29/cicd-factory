@@ -1,6 +1,9 @@
 # Credentials
 .env
 
+# Foundation
+foundation/nginx/
+
 # Cloned projects
 project/
 

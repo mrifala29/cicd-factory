@@ -51,6 +51,12 @@ Commits and pushes the newly generated or updated CI/CD configuration files back
 ### 6. `/ssh-dev`
 Provides direct SSH access into the dev server for manual inspection, debugging, or troubleshooting.
 
+### 7. `/ssh-prod`
+Provides direct SSH access into the prod server for manual inspection, Nginx configuration, or troubleshooting.
+
+### 8. `/setup-domain`
+Configures an Nginx reverse proxy virtual host on `server-prod` to route Cloudflare traffic to services running on `server-dev` or `server-prod`. Automatically generates `/etc/nginx/sites-available/<domain>`, symlinks to `sites-enabled`, tests syntax, and reloads Nginx.
+
 ## 🎯 End-to-End Usage Pipeline (How to Use)
 
 Berikut adalah panduan langkah demi langkah menggunakan CI/CD Factory ini dari awal (kloning) hingga pipeline berjalan di GitLab:
@@ -89,10 +95,16 @@ Setelah konfigurasi siap, kirimkan file tersebut ke server dev:
 *Assistant akan mengirim file `docker-compose-server.yml` (sebagai `docker-compose.yml`) dan `server.env` (sebagai `.env`) ke folder `PROJECT_DIR` di server menggunakan SCP.*
 
 ### 6. Push CI/CD & Trigger Pipeline
-Terakhir, push perubahan CI/CD lokal ke GitLab untuk menjalankan prosesnya:
+Push perubahan CI/CD lokal ke GitLab untuk menjalankan prosesnya:
 > "Tolong jalankan `/push-cicd`"
 
 *Assistant akan melakukan commit & push file CI/CD ke branch `dev`. Begitu masuk GitLab, pipeline CI/CD akan otomatis berjalan untuk melakukan tahap `check`, `build`, `deploy`, dan `verify`!*
+
+### 7. Setup Domain & Nginx Reverse Proxy (Cloudflare -> Nginx -> Service)
+Setelah aplikasi berhasil terdeploy dan port UI-nya telah aktif, hubungkan dengan domain publik melalui Nginx reverse proxy di `server-prod`:
+> "Tolong `/setup-domain` untuk domain `myapp.linkit360.ai` port `3000` di `server-dev`"
+
+*Assistant akan membuat konfigurasi di `/etc/nginx/sites-available/<domain>`, membuat symlink ke `/etc/nginx/sites-enabled/`, menguji dengan `nginx -t`, dan me-reload Nginx di `server-prod`.*
 
 ---
 

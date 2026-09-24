@@ -15,6 +15,14 @@ description: Core rules for CI/CD factory project operations
 - CI/CD variables MUST be set via GitLab UI (Settings > CI/CD > Variables), never in files.
 - Server project path follows pattern: `/opt/apps/<group>/<repo-name>`.
 - SSH to dev server using: `ssh server-dev` with password from `.env` (`SSH_PASS`).
+- SSH to prod server using: `ssh server-prod` with password from `.env` (`SSH_PASS_PROD` or fallback `SSH_PASS`).
+
+## Server Architecture & Domain Setup
+- `server-dev`: Hosts application containers (internal IP from `UPSTREAM_HOST_DEV`, default `10.0.0.220`).
+- `server-prod`: Hosts Nginx reverse proxy (upstream host from `UPSTREAM_HOST_PROD`, default `127.0.0.1`).
+- Routing flow: `Cloudflare -> Nginx (server-prod) -> Service (server-dev:$UPSTREAM_HOST_DEV:<PORT> or server-prod:$UPSTREAM_HOST_PROD:<PORT>)`.
+- Nginx virtual hosts MUST be saved as `/etc/nginx/sites-available/<domain>` and symlinked to `/etc/nginx/sites-enabled/<domain>`.
+- Always test Nginx config (`sudo nginx -t`) before reloading (`sudo systemctl reload nginx`).
 
 ## Server Files
 - `docker-compose-server.yml` — Docker compose file to be SCP'd to server as `docker-compose.yml`.
