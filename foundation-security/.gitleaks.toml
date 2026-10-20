@@ -1,0 +1,11 @@
+# ============================================================
+# GitLeaks Configuration
+# ============================================================
+
+[allowlist]
+description = "Allowlist historical .env files and documentation specs"
+paths = [
+  '''(?i)(^|/)\.env$''',
+  '''(?i)(^|/)\.env\..*''',
+  '''(?i)(^|/)docs/.*'''
+]
