@@ -1,7 +1,10 @@
 # ============================================================
 # SECURITY CHECKS (STAGE: security_scan & report)
-# Tools: GitLeaks (Secret Scanning) & Trivy (SAST & Misconfig)
-# Artifacts: gitleaks.html, trivy.html, security-reports.html
+# Tools:
+# - GitLeaks (Secret Scanning)
+# - Trivy (SAST & Misconfig)
+# - Semgrep (Code Scanning)
+# Artifacts: gitleaks.html, trivy.html, semgrep.html, security-reports.html
 # ============================================================
 
 # ============================================================
@@ -251,7 +254,162 @@ check_sast_trivy:
 
 
 # ============================================================
-# 3. AGGREGATED REPORT (security-reports.html)
+# 3. CODE SCANNING - SEMGREP (semgrep.html)
+# ============================================================
+
+check_code_semgrep:
+  stage: security_scan
+  allow_failure: true
+
+  image:
+    name: semgrep/semgrep:latest
+    entrypoint: [""]
+
+  script:
+    - |
+      mkdir -p artifacts
+
+      echo ""
+      echo "============================================================"
+      echo "                 CODE SCANNING - SEMGREP"
+      echo "============================================================"
+      echo ""
+
+      # 1. Run Semgrep scan with p/default ruleset
+      semgrep scan \
+        --config "p/default" \
+        --metrics=off \
+        --json \
+        --output artifacts/semgrep.json \
+        . || true
+
+      # 2. Generate markdown summary for console
+      semgrep scan \
+        --config "p/default" \
+        --metrics=off \
+        --text \
+        --output artifacts/semgrep.md \
+        . || true
+
+      cat artifacts/semgrep.md
+
+      # 3. Generate HTML report and summary JSON via built-in python
+      python3 - << 'EOF'
+      import json, html
+
+      try:
+          with open("artifacts/semgrep.json", "r") as f:
+              data = json.load(f)
+          results = data.get("results", [])
+      except Exception as e:
+          results = []
+
+      findings_count = len(results)
+      result_status = "PASS" if findings_count == 0 else "REVIEW"
+      detail_text = "No code security issues detected." if findings_count == 0 else f"{findings_count} potential code issues detected."
+
+      with open("artifacts/semgrep-summary.json", "w") as f:
+          json.dump({
+              "check": "semgrep",
+              "result": result_status,
+              "findings": findings_count,
+              "detail": detail_text
+          }, f, indent=2)
+
+      rows = []
+      for r in results:
+          check_id = html.escape(str(r.get("check_id", "")))
+          path = html.escape(str(r.get("path", "")))
+          line = r.get("start", {}).get("line", "")
+          msg = html.escape(str(r.get("extra", {}).get("message", "")))
+          sev = html.escape(str(r.get("extra", {}).get("severity", "INFO")))
+          code = html.escape(str(r.get("extra", {}).get("lines", "")))
+
+          rows.append(f"""
+          <tr>
+            <td><span class="badge {sev.lower()}">{sev}</span></td>
+            <td><span class="rule">{check_id}</span></td>
+            <td><span class="file">{path}</span></td>
+            <td>{line}</td>
+            <td>{msg}<pre class="code"><code>{code}</code></pre></td>
+          </tr>
+          """)
+
+      rows_html = "".join(rows) if rows else '<tr><td colspan="5" class="no-findings">✓ No code vulnerabilities or anti-patterns detected!</td></tr>'
+
+      html_doc = f"""<!DOCTYPE html>
+      <html lang="en">
+      <head>
+        <meta charset="UTF-8">
+        <title>Semgrep Code Security Report</title>
+        <style>
+          body {{ font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; background: #0f172a; color: #f8fafc; padding: 24px; margin: 0; }}
+          .container {{ max-width: 1200px; margin: 0 auto; }}
+          .header {{ display: flex; justify-content: space-between; align-items: center; margin-bottom: 24px; }}
+          h1 {{ color: #38bdf8; margin: 0; font-size: 24px; }}
+          .back-btn {{ padding: 8px 14px; background: #334155; color: #e2e8f0; text-decoration: none; border-radius: 6px; font-size: 13px; font-weight: 500; }}
+          .back-btn:hover {{ background: #475569; }}
+          p.subtitle {{ color: #94a3b8; margin-top: 6px; margin-bottom: 24px; font-size: 14px; }}
+          .card {{ background: #1e293b; border-radius: 8px; padding: 20px; box-shadow: 0 4px 6px -1px rgba(0,0,0,0.3); }}
+          table {{ width: 100%; border-collapse: collapse; margin-top: 12px; }}
+          th, td {{ padding: 12px 14px; text-align: left; border-bottom: 1px solid #334155; font-size: 13px; vertical-align: top; }}
+          th {{ background: #0f172a; color: #94a3b8; text-transform: uppercase; font-size: 11px; letter-spacing: 0.05em; }}
+          tr:hover {{ background: #273549; }}
+          .badge {{ padding: 3px 8px; border-radius: 4px; font-size: 11px; font-weight: bold; text-transform: uppercase; }}
+          .badge.error {{ background: #881337; color: #fda4af; }}
+          .badge.warning {{ background: #78350f; color: #fde68a; }}
+          .badge.info {{ background: #1e3a8a; color: #93c5fd; }}
+          .rule {{ font-weight: 600; color: #fbbf24; font-family: monospace; font-size: 12px; }}
+          .file {{ font-family: monospace; color: #38bdf8; font-size: 12px; }}
+          .code {{ background: #0b1120; padding: 8px; border-radius: 4px; color: #cbd5e1; font-family: monospace; font-size: 11px; overflow-x: auto; margin-top: 6px; white-space: pre-wrap; }}
+          .no-findings {{ text-align: center; padding: 32px; color: #34d399; font-size: 16px; font-weight: bold; }}
+        </style>
+      </head>
+      <body>
+        <div class="container">
+          <div class="card">
+            <div class="header">
+              <h1>🛡️ Semgrep Code Security Report</h1>
+              <a href="security-reports.html" class="back-btn">&larr; Back to Dashboard</a>
+            </div>
+            <p class="subtitle">Automated static code analysis scanning for vulnerabilities and insecure coding patterns.</p>
+            <table>
+              <thead>
+                <tr>
+                  <th>Severity</th>
+                  <th>Rule ID</th>
+                  <th>File</th>
+                  <th>Line</th>
+                  <th>Message & Code Snippet</th>
+                </tr>
+              </thead>
+              <tbody>
+                {rows_html}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </body>
+      </html>"""
+
+      with open("artifacts/semgrep.html", "w") as f:
+          f.write(html_doc)
+      print(f"HTML RPT: artifacts/semgrep.html ({findings_count} findings)")
+      EOF
+
+      echo ""
+      echo "============================================================"
+      echo ""
+
+  artifacts:
+    when: always
+    expire_in: 30 days
+    paths:
+      - artifacts/semgrep*
+
+
+# ============================================================
+# 4. AGGREGATED REPORT (security-reports.html)
 # ============================================================
 
 security_report:
@@ -263,6 +421,8 @@ security_report:
     - job: check_secret_gitleaks
       artifacts: true
     - job: check_sast_trivy
+      artifacts: true
+    - job: check_code_semgrep
       artifacts: true
 
   script:
@@ -280,6 +440,8 @@ security_report:
       GITLEAKS_DET="No data"
       TRIVY_RES="UNKNOWN"
       TRIVY_DET="No data"
+      SEMGREP_RES="UNKNOWN"
+      SEMGREP_DET="No data"
 
       if [ -f "artifacts/gitleaks-summary.json" ]; then
         GITLEAKS_RES=$(grep -o '"result": "[^"]*"' artifacts/gitleaks-summary.json | cut -d'"' -f4)
@@ -294,6 +456,13 @@ security_report:
         printf "%-20s %-10s %-10s %-30s\n" "Trivy" "$TRIVY_RES" "-" "$TRIVY_DET"
       fi
 
+      if [ -f "artifacts/semgrep-summary.json" ]; then
+        SEMGREP_RES=$(grep -o '"result": "[^"]*"' artifacts/semgrep-summary.json | cut -d'"' -f4)
+        FND=$(grep -o '"findings": [0-9]*' artifacts/semgrep-summary.json | awk '{print $2}')
+        SEMGREP_DET=$(grep -o '"detail": "[^"]*"' artifacts/semgrep-summary.json | cut -d'"' -f4)
+        printf "%-20s %-10s %-10s %-30s\n" "Semgrep" "$SEMGREP_RES" "$FND" "$SEMGREP_DET"
+      fi
+
       echo "--------------------------------------------------------------------------------"
       echo ""
 
@@ -306,7 +475,7 @@ security_report:
         <title>Security Analysis Dashboard - $CI_PROJECT_NAME</title>
         <style>
           body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; background: #0b1120; color: #f8fafc; padding: 32px; margin: 0; }
-          .container { max-width: 900px; margin: 0 auto; }
+          .container { max-width: 1100px; margin: 0 auto; }
           h1 { color: #38bdf8; margin-bottom: 6px; }
           p.meta { color: #94a3b8; font-size: 14px; margin-bottom: 28px; }
           .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(320px, 1fr)); gap: 20px; }
@@ -335,6 +504,11 @@ security_report:
               <p class="detail">$TRIVY_DET</p>
               <a class="btn" href="trivy.html">Open Trivy HTML Report &rarr;</a>
             </div>
+            <div class="card">
+              <h2>Semgrep Code Scan <span class="badge \$(echo $SEMGREP_RES | tr '[:upper:]' '[:lower:]')">$SEMGREP_RES</span></h2>
+              <p class="detail">$SEMGREP_DET</p>
+              <a class="btn" href="semgrep.html">Open Semgrep HTML Report &rarr;</a>
+            </div>
           </div>
         </div>
       </body>
@@ -355,7 +529,6 @@ security_report:
 
 # ============================================================
 # NOTE: The following scanners are temporarily disabled / OFF:
-# - Semgrep (Code Scanning)
 # - Bandit (Python AST Linter)
 # - Snyk Open Source (SCA)
 # - Snyk Container (Container Image Vulnerabilities)

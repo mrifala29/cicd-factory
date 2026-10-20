@@ -13,7 +13,6 @@
 
   before_script:
     - docker login -u "$CI_REGISTRY_USER" -p "$CI_REGISTRY_PASSWORD" "$CI_REGISTRY"
-    - docker run --privileged --rm tonistiigi/binfmt --install all
     - docker buildx create --use || true
     - docker buildx inspect --bootstrap
 
@@ -30,7 +29,7 @@ build_image_dev:
       echo ""
 
       docker buildx build \
-        --platform linux/amd64,linux/arm64 \
+        --platform linux/amd64 \
         --provenance=false \
         -f Dockerfile \
         -t "$IMAGE_NAME:dev" \
@@ -39,9 +38,38 @@ build_image_dev:
       echo ""
       echo "BUILD RESULT : SUCCESS"
       echo "IMAGE        : $IMAGE_NAME:dev"
-      echo "PLATFORMS    : linux/amd64,linux/arm64"
+      echo "PLATFORMS    : linux/amd64"
       echo "============================================================"
       echo ""
 
   only:
     - dev
+
+
+build_image_prod:
+  extends: .build_template
+
+  script:
+    - |
+      echo ""
+      echo "============================================================"
+      echo "                    BUILD - PRODUCTION"
+      echo "============================================================"
+      echo ""
+
+      docker buildx build \
+        --platform linux/amd64 \
+        --provenance=false \
+        -f Dockerfile \
+        -t "$IMAGE_NAME:latest" \
+        --push .
+
+      echo ""
+      echo "BUILD RESULT : SUCCESS"
+      echo "IMAGE        : $IMAGE_NAME:latest"
+      echo "PLATFORMS    : linux/amd64"
+      echo "============================================================"
+      echo ""
+
+  only:
+    - main
