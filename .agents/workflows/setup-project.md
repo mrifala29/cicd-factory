@@ -54,6 +54,7 @@ Create `project/<repo-name>/server.env` with the environment variables the app n
 This file will be SCP'd to the server as `.env`.
 - Ask the user what environment variables are needed.
 - If any env var defines a port (e.g. APP_PORT), ensure it doesn't collide.
+- Ensure `server.env` is added to `project/<repo-name>/.gitignore` so it is NEVER committed or pushed to GitLab.
 
 ### 7. Summary
 Report what was done:

@@ -27,9 +27,9 @@ git checkout -b dev || git checkout dev
 ```
 
 ### 3. Stage Files
-Add only the CI/CD related files to avoid committing unrelated changes.
+Add only the CI/CD related files (never add `server.env` or `.env` as they contain server secrets):
 ```bash
-git add .gitlab/ .gitlab-ci.yml docker-compose-server.yml server.env
+git add .gitlab/ .gitlab-ci.yml docker-compose-server.yml .gitignore
 ```
 
 ### 4. Commit

@@ -16,6 +16,8 @@ deploy_dev:
 
   script:
     - |
+      TARGET_DIR="${PROJECT_DIR:-${DEV_PROJECT_DIR}}"
+
       echo ""
       echo "============================================================"
       echo "                   DEPLOY - DEVELOPMENT"
@@ -30,7 +32,7 @@ deploy_dev:
           -u root \
           -p '$REGISTRY_TOKEN' &&
 
-        cd $PROJECT_DIR &&
+        cd $TARGET_DIR &&
 
         docker pull $IMAGE_NAME:dev &&
 
@@ -42,8 +44,51 @@ deploy_dev:
       echo "DEPLOY RESULT : SUCCESS"
       echo "ENVIRONMENT   : DEVELOPMENT"
       echo "IMAGE         : $IMAGE_NAME:dev"
+      echo "TARGET DIR    : $TARGET_DIR"
       echo "============================================================"
       echo ""
 
   only:
     - dev
+
+
+deploy_prod:
+  extends: .deploy_template
+
+  script:
+    - |
+      TARGET_DIR="${PROD_PROJECT_DIR:-$PROJECT_DIR}"
+
+      echo ""
+      echo "============================================================"
+      echo "                    DEPLOY - PRODUCTION"
+      echo "============================================================"
+      echo ""
+
+      sshpass -p "$PROD_PASSWORD" ssh \
+        -o StrictHostKeyChecking=no \
+        "$PROD_USER@$PROD_HOST" "
+
+        docker login $CI_REGISTRY \
+          -u root \
+          -p '$REGISTRY_TOKEN' &&
+
+        cd $TARGET_DIR &&
+
+        docker pull $IMAGE_NAME:latest &&
+
+        IMAGE_NAME=$IMAGE_NAME IMAGE_TAG=latest docker compose up -d
+
+      "
+
+      echo ""
+      echo "DEPLOY RESULT : SUCCESS"
+      echo "ENVIRONMENT   : PRODUCTION"
+      echo "IMAGE         : $IMAGE_NAME:latest"
+      echo "TARGET DIR    : $TARGET_DIR"
+      echo "============================================================"
+      echo ""
+
+  only:
+    - main
+  when: manual

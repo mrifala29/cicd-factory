@@ -16,11 +16,13 @@ verify_dev:
 
   script:
     - |
+      TARGET_DIR="${PROJECT_DIR:-${DEV_PROJECT_DIR}}"
+
       sshpass -p "$DEV_PASSWORD" ssh \
         -o StrictHostKeyChecking=no \
         "$DEV_USER@$DEV_HOST" '
 
-        cd '"$PROJECT_DIR"'
+        cd '"$TARGET_DIR"'
 
         echo ""
         echo "============================================================"

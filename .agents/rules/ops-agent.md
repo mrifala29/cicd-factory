@@ -26,10 +26,11 @@ description: Core rules for CI/CD factory project operations
 
 ## Server Files
 - `docker-compose-server.yml` — Docker compose file to be SCP'd to server as `docker-compose.yml`.
-- `server.env` — Environment file to be SCP'd to server as `.env`.
+- `server.env` — Environment file created locally and SCP'd to server as `.env`.
 
 ## Security
 - NEVER print or expose `.env` contents to output/artifacts.
+- `server.env` MUST ALWAYS be added to `.gitignore` and NEVER committed or pushed to GitLab. Transfer to server only via `/deploy-server` (SCP).
 - Use `sshpass` for SSH/SCP automation with password from `.env`.
 - When cloning GitLab, try without credentials first. If auth fails, use format: `http://GITLAB_USERNAME:GITLAB_PASS@host/path/repo.git`.
 
