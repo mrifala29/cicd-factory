@@ -754,17 +754,32 @@ check_container_snyk:
       else:
           err_msg = "Scan output artifacts/snyk-container-raw.json not found"
 
-      total = len(vulns)
+      project_name = os.environ.get("CI_PROJECT_NAME", "Application")
+
+      # Deduplicate vulnerabilities by ID, Package Name, and Version
+      unique_vulns = []
+      seen_keys = set()
+      for v in vulns:
+          vuln_id = v.get("id") or ""
+          pkg_name = v.get("packageName") or v.get("name") or ""
+          pkg_ver = v.get("version") or ""
+          dedup_key = (vuln_id, pkg_name, pkg_ver)
+          if dedup_key not in seen_keys:
+              seen_keys.add(dedup_key)
+              unique_vulns.append(v)
+
+      total = len(unique_vulns)
       if err_msg and total == 0:
           status = "ERROR"
           detail = f"Snyk error: {err_msg}"
       elif total > 0:
-          high_crit = sum(1 for v in vulns if str(v.get("severity", "")).lower() in ["high", "critical"])
+          high_crit = sum(1 for v in unique_vulns if str(v.get("severity", "")).lower() in ["high", "critical"])
           status = "REVIEW"
           if high_crit > 0:
-              detail = f"{total} vulnerabilities detected ({high_crit} HIGH/CRITICAL) in container image."
+              detail = f"{total} unique vulnerabilities detected ({high_crit} HIGH/CRITICAL) in container OS packages."
           else:
-              detail = f"{total} vulnerabilities detected in container image."
+              sample_pkg = unique_vulns[0].get("packageName") or unique_vulns[0].get("name") or "package"
+              detail = f"{total} unique vulnerability detected in container OS package ({sample_pkg})." if total == 1 else f"{total} unique vulnerabilities detected in container OS packages."
       else:
           status = "PASS"
           detail = "No container image vulnerabilities detected."
@@ -779,7 +794,7 @@ check_container_snyk:
           json.dump(summary_data, f, indent=2)
 
       rows = []
-      for v in vulns:
+      for v in unique_vulns:
           sev = str(v.get("severity", "info")).lower()
           title = html.escape(str(v.get("title") or v.get("id") or "Vulnerability"))
           vuln_id = html.escape(str(v.get("id", "")))
@@ -810,19 +825,20 @@ check_container_snyk:
           else:
               rows_html = '<tr><td colspan="4" class="no-findings">✓ No container image vulnerabilities found!</td></tr>'
 
-      base_info = f"Base Image: {html.escape(base_image)} | " if base_image else ""
+      base_info = f"Base OS: {html.escape(base_image)}" if base_image else "Base OS: Linux Container"
       html_doc = f"""<!DOCTYPE html>
       <html lang="en">
       <head>
-        <meta charset="UTF-8"><title>Snyk Container Security Report</title>
+        <meta charset="UTF-8"><title>Snyk Container Security Report - {html.escape(project_name)}</title>
         <style>
           body {{ font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; background: #0f172a; color: #f8fafc; padding: 24px; margin: 0; }}
           .container {{ max-width: 1200px; margin: 0 auto; }}
           .header {{ display: flex; justify-content: space-between; align-items: center; margin-bottom: 24px; }}
           h1 {{ color: #38bdf8; margin: 0; font-size: 24px; }}
+          .subtitle {{ color: #94a3b8; font-size: 14px; margin-top: 6px; margin-bottom: 0; }}
           .back-btn {{ padding: 8px 14px; background: #334155; color: #e2e8f0; text-decoration: none; border-radius: 6px; font-size: 13px; font-weight: 500; }}
           .card {{ background: #1e293b; border-radius: 8px; padding: 20px; }}
-          table {{ width: 100%; border-collapse: collapse; margin-top: 12px; }}
+          table {{ width: 100%; border-collapse: collapse; margin-top: 16px; }}
           th, td {{ padding: 12px 14px; text-align: left; border-bottom: 1px solid #334155; font-size: 13px; }}
           th {{ background: #0f172a; color: #94a3b8; text-transform: uppercase; font-size: 11px; }}
           .badge {{ padding: 3px 8px; border-radius: 4px; font-size: 11px; font-weight: bold; text-transform: uppercase; }}
@@ -836,9 +852,18 @@ check_container_snyk:
       </head>
       <body>
         <div class="container"><div class="card">
-          <div class="header"><h1>🐳 Snyk Container Security Report</h1><a href="security-reports.html" class="back-btn">&larr; Back to Dashboard</a></div>
-          <p style="color:#94a3b8;font-size:14px;">{base_info}Scanned container base image and OS packages for vulnerabilities and security advisories.</p>
-          <table><thead><tr><th>Severity</th><th>Vulnerability</th><th>Package</th><th>Remediation / Fix</th></tr></thead>
+          <div class="header">
+            <div>
+              <h1>🐳 Snyk Container Security Report</h1>
+              <p class="subtitle">
+                Target Container: <strong style="color:#38bdf8;">{html.escape(project_name)}</strong> (app-scan:local) &nbsp;|&nbsp;
+                <strong style="color:#e2e8f0;">{base_info}</strong>
+              </p>
+            </div>
+            <a href="security-reports.html" class="back-btn">&larr; Back to Dashboard</a>
+          </div>
+          <p style="color:#94a3b8;font-size:13px;margin: 12px 0 0 0;">Scanned container base OS and installed system packages for known security advisories.</p>
+          <table><thead><tr><th>Severity</th><th>Vulnerability (CVE)</th><th>Vulnerable OS Package</th><th>Remediation / Fix</th></tr></thead>
           <tbody>{rows_html}</tbody>
           </table>
         </div></div>
@@ -846,7 +871,7 @@ check_container_snyk:
 
       with open("artifacts/snyk-container.html", "w") as f:
           f.write(html_doc)
-      print(f"HTML RPT: artifacts/snyk-container.html ({total} findings)")
+      print(f"HTML RPT: artifacts/snyk-container.html ({total} unique findings)")
       PYEOF
       fi
 
