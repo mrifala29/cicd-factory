@@ -1,10 +1,12 @@
 # ============================================================
-# SECURITY CHECKS (STAGE: security_scan & report)
+# SECURITY CHECKS (STAGE: check)
 # Tools:
 # - GitLeaks (Secret Scanning)
 # - Trivy (SAST & Misconfig)
 # - Semgrep (Code Scanning)
-# Artifacts: gitleaks.html, trivy.html, semgrep.html, security-reports.html
+# - Snyk Open Source (SCA Dependency Scanning)
+# - Snyk Container (Container Image Vulnerabilities)
+# Artifacts: gitleaks.html, trivy.html, semgrep.html, snyk.html, snyk-container.html, security-reports.html
 # ============================================================
 
 # ============================================================
@@ -12,7 +14,7 @@
 # ============================================================
 
 check_secret_gitleaks:
-  stage: security_scan
+  stage: check
   allow_failure: true
 
   image:
@@ -171,7 +173,7 @@ check_secret_gitleaks:
 # ============================================================
 
 check_sast_trivy:
-  stage: security_scan
+  stage: check
   allow_failure: true
 
   image:
@@ -283,7 +285,7 @@ check_sast_trivy:
 # ============================================================
 
 check_code_semgrep:
-  stage: security_scan
+  stage: check
   allow_failure: true
 
   image:
@@ -434,11 +436,458 @@ check_code_semgrep:
 
 
 # ============================================================
-# 4. AGGREGATED REPORT (security-reports.html)
+# 4. SCA DEPENDENCY SCANNING - SNYK (snyk.html)
+# ============================================================
+
+check_sca_snyk:
+  stage: check
+  allow_failure: true
+
+  image:
+    name: snyk/snyk:golang
+    entrypoint: [""]
+
+  script:
+    - |
+      mkdir -p artifacts
+
+      echo ""
+      echo "============================================================"
+      echo "           SCA DEPENDENCY SCANNING - SNYK"
+      echo "============================================================"
+      echo ""
+
+      if [ -z "$SNYK_TOKEN" ]; then
+        echo "WARNING : SNYK_TOKEN is not set. Skipping Snyk scan."
+        cat > artifacts/snyk-summary.json << 'EOF'
+      {
+        "check": "snyk",
+        "result": "SKIPPED",
+        "findings": 0,
+        "detail": "SNYK_TOKEN is not configured."
+      }
+      EOF
+        cat > artifacts/snyk.html << 'EOF'
+      <!DOCTYPE html><html><body style="font-family:sans-serif;padding:30px;background:#0f172a;color:#f8fafc;">
+      <h2>Snyk SCA Scan Skipped</h2><p>SNYK_TOKEN variable is not configured.</p>
+      <a href="security-reports.html" style="color:#38bdf8;">&larr; Back to Dashboard</a>
+      </body></html>
+      EOF
+        exit 0
+      fi
+
+      echo "--> Running Snyk dependency test..."
+      echo "--> SNYK_TOKEN detected (length: ${#SNYK_TOKEN} chars)"
+      export SNYK_TOKEN="$SNYK_TOKEN"
+      # Run test and capture json output (snyk exits non-zero if vulnerabilities are found)
+      snyk test --json > artifacts/snyk-raw.json || true
+
+      # Convert to HTML report using snyk-to-html if installed
+      if command -v snyk-to-html >/dev/null 2>&1; then
+        snyk-to-html -i artifacts/snyk-raw.json -o artifacts/snyk.html || true
+      fi
+
+      # Parse summary and generate clean HTML report using Go
+      cat << 'GOEOF' > /tmp/parse_snyk.go
+      package main
+
+      import (
+      	"encoding/json"
+      	"fmt"
+      	"html"
+      	"os"
+      	"strings"
+      )
+
+      type Vuln struct {
+      	ID       string      `json:"id"`
+      	Title    string      `json:"title"`
+      	Name     string      `json:"name"`
+      	Version  string      `json:"version"`
+      	Severity string      `json:"severity"`
+      	FixedIn  interface{} `json:"fixedIn"`
+      }
+
+      type SnykOutput struct {
+      	Vulnerabilities []Vuln `json:"vulnerabilities"`
+      	Summary         string `json:"summary"`
+      	Error           string `json:"error"`
+      }
+
+      func main() {
+      	bytes, err := os.ReadFile("artifacts/snyk-raw.json")
+      	var vulns []Vuln
+      	var errMsg string
+      	var summaryText string
+
+      	if err == nil {
+      		var single SnykOutput
+      		if err := json.Unmarshal(bytes, &single); err == nil {
+      			vulns = single.Vulnerabilities
+      			errMsg = single.Error
+      			summaryText = single.Summary
+      		} else {
+      			var multi []SnykOutput
+      			if err := json.Unmarshal(bytes, &multi); err == nil {
+      				for _, m := range multi {
+      					vulns = append(vulns, m.Vulnerabilities...)
+      					if m.Summary != "" {
+      						summaryText += m.Summary + "; "
+      					}
+      				}
+      			}
+      		}
+      	}
+
+      	total := len(vulns)
+      	status := "PASS"
+      	detail := "No vulnerable dependencies detected."
+      	if errMsg != "" {
+      		status = "ERROR"
+      		detail = "Snyk error: " + errMsg
+      	} else if total > 0 {
+      		status = "REVIEW"
+      		detail = fmt.Sprintf("%d dependency vulnerabilities detected.", total)
+      	}
+
+      	summaryJSON := fmt.Sprintf(`{"check":"snyk","result":"%s","findings":%d,"detail":"%s"}`, status, total, detail)
+      	_ = os.WriteFile("artifacts/snyk-summary.json", []byte(summaryJSON), 0644)
+
+      	var rows strings.Builder
+      	for _, v := range vulns {
+      		sev := strings.ToLower(v.Severity)
+      		title := html.EscapeString(v.Title)
+      		if title == "" {
+      			title = html.EscapeString(v.ID)
+      		}
+      		pkg := html.EscapeString(fmt.Sprintf("%s@%s", v.Name, v.Version))
+      		rows.WriteString(fmt.Sprintf(`<tr><td><span class="badge %s">%s</span></td><td class="rule">%s</td><td class="file">%s</td><td>%v</td></tr>`, sev, strings.ToUpper(sev), title, pkg, v.FixedIn))
+      	}
+
+      	rowsHTML := rows.String()
+      	if rowsHTML == "" {
+      		if status == "ERROR" {
+      			rowsHTML = fmt.Sprintf(`<tr><td colspan="4" class="no-findings" style="color:#fda4af;">⚠ Snyk error: %s</td></tr>`, html.EscapeString(errMsg))
+      		} else {
+      			rowsHTML = `<tr><td colspan="4" class="no-findings">✓ No vulnerable dependencies found in packages!</td></tr>`
+      		}
+      	}
+
+      	const htmlTemplate = `<!DOCTYPE html>
+      <html lang="en">
+      <head>
+        <meta charset="UTF-8"><title>Snyk Dependency Security Report</title>
+        <style>
+          body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; background: #0f172a; color: #f8fafc; padding: 24px; margin: 0; }
+          .container { max-width: 1200px; margin: 0 auto; }
+          .header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 24px; }
+          h1 { color: #38bdf8; margin: 0; font-size: 24px; }
+          .back-btn { padding: 8px 14px; background: #334155; color: #e2e8f0; text-decoration: none; border-radius: 6px; font-size: 13px; font-weight: 500; }
+          .card { background: #1e293b; border-radius: 8px; padding: 20px; }
+          table { width: 100%; border-collapse: collapse; margin-top: 12px; }
+          th, td { padding: 12px 14px; text-align: left; border-bottom: 1px solid #334155; font-size: 13px; }
+          th { background: #0f172a; color: #94a3b8; text-transform: uppercase; font-size: 11px; }
+          .badge { padding: 3px 8px; border-radius: 4px; font-size: 11px; font-weight: bold; text-transform: uppercase; }
+          .badge.critical, .badge.high { background: #881337; color: #fda4af; }
+          .badge.medium { background: #78350f; color: #fde68a; }
+          .badge.low, .badge.info { background: #1e3a8a; color: #93c5fd; }
+          .rule { font-weight: 600; color: #fbbf24; }
+          .file { font-family: monospace; color: #38bdf8; }
+          .no-findings { text-align: center; padding: 32px; color: #34d399; font-size: 16px; font-weight: bold; }
+        </style>
+      </head>
+      <body>
+        <div class="container"><div class="card">
+          <div class="header"><h1>📦 Snyk Open Source SCA Report</h1><a href="security-reports.html" class="back-btn">&larr; Back to Dashboard</a></div>
+          <p style="color:#94a3b8;font-size:14px;">Scanned project dependencies for known CVEs and security advisories.</p>
+          <table><thead><tr><th>Severity</th><th>Vulnerability</th><th>Package</th><th>Remediation / Fix</th></tr></thead>
+          <tbody>{{ROWS_CONTENT}}</tbody>
+          </table>
+        </div></div>
+      </body></html>`
+
+      	htmlDoc := strings.Replace(htmlTemplate, "{{ROWS_CONTENT}}", rowsHTML, 1)
+      	_ = os.WriteFile("artifacts/snyk.html", []byte(htmlDoc), 0644)
+      }
+      GOEOF
+      go run /tmp/parse_snyk.go || true
+
+      echo ""
+      echo "------------------------------------------------------------"
+      if [ -f "artifacts/snyk-summary.json" ]; then
+        cat artifacts/snyk-summary.json
+      fi
+      echo "------------------------------------------------------------"
+      echo "HTML RPT: artifacts/snyk.html"
+      echo "NOTE    : This check is informational and does not block"
+      echo "          the pipeline."
+      echo "============================================================"
+      echo ""
+
+  artifacts:
+    when: always
+    expire_in: 30 days
+    paths:
+      - artifacts/snyk*
+
+
+# ============================================================
+# 5. CONTAINER SCANNING - SNYK (snyk-container.html)
+# ============================================================
+
+check_container_snyk:
+  stage: check
+  allow_failure: true
+
+  image:
+    name: snyk/snyk:docker
+    entrypoint: [""]
+
+  services:
+    - name: docker:27-dind
+      alias: docker
+
+  variables:
+    DOCKER_HOST: "tcp://docker:2375"
+    DOCKER_TLS_CERTDIR: ""
+    SNYK_SKIP_UPDATE_CHECK: "true"
+
+  script:
+    - |
+      mkdir -p artifacts
+
+      echo ""
+      echo "============================================================"
+      echo "           CONTAINER SCANNING - SNYK CONTAINER"
+      echo "============================================================"
+      echo ""
+
+      if [ -z "$SNYK_TOKEN" ]; then
+        echo "WARNING : SNYK_TOKEN is not set. Skipping Snyk Container scan."
+        cat > artifacts/snyk-container-summary.json << 'EOF'
+      {
+        "check": "snyk-container",
+        "result": "SKIPPED",
+        "findings": 0,
+        "detail": "SNYK_TOKEN is not configured."
+      }
+      EOF
+        cat > artifacts/snyk-container.html << 'EOF'
+      <!DOCTYPE html><html><body style="font-family:sans-serif;padding:30px;background:#0f172a;color:#f8fafc;">
+      <h2>Snyk Container Scan Skipped</h2><p>SNYK_TOKEN variable is not configured.</p>
+      <a href="security-reports.html" style="color:#38bdf8;">&larr; Back to Dashboard</a>
+      </body></html>
+      EOF
+        exit 0
+      fi
+
+      echo "--> Waiting for Docker daemon to become ready..."
+      for i in $(seq 1 30); do
+        if docker info >/dev/null 2>&1; then
+          echo "Docker daemon is ready!"
+          break
+        fi
+        echo "Waiting for Docker daemon ($i/30)..."
+        sleep 1
+      done
+
+      echo "--> Building local container image for scanning..."
+      docker build -t app-scan:local -f Dockerfile . || true
+
+      echo "--> Running Snyk Container test..."
+      echo "--> SNYK_TOKEN detected (length: ${#SNYK_TOKEN} chars)"
+      export SNYK_TOKEN="$SNYK_TOKEN"
+
+      # Run container test and capture json output (snyk exits non-zero if vulnerabilities are found)
+      snyk container test app-scan:local --file=Dockerfile --json > artifacts/snyk-container-raw.json || true
+
+      # Convert to HTML report using snyk-to-html if installed
+      if command -v snyk-to-html >/dev/null 2>&1; then
+        snyk-to-html -i artifacts/snyk-container-raw.json -o artifacts/snyk-container.html || true
+      fi
+
+      # Parse output and generate modern dark-mode HTML report using Python
+      if ! command -v python3 >/dev/null 2>&1; then
+        echo "--> Installing python3 for report generation..."
+        apk add --no-cache python3 >/dev/null 2>&1 || true
+      fi
+
+      if command -v python3 >/dev/null 2>&1; then
+        python3 - << 'PYEOF'
+      import json, html, os, sys
+
+      raw_file = "artifacts/snyk-container-raw.json"
+      vulns = []
+      err_msg = ""
+      base_image = ""
+
+      if os.path.exists(raw_file):
+          try:
+              with open(raw_file, "r") as f:
+                  content = f.read().strip()
+              if content:
+                  try:
+                      data = json.loads(content)
+                  except Exception:
+                      start = min([i for i in [content.find('{'), content.find('[')] if i != -1], default=-1)
+                      end = max(content.rfind('}'), content.rfind(']'))
+                      if start != -1 and end != -1 and end > start:
+                          data = json.loads(content[start:end+1])
+                      else:
+                          data = {}
+                  
+                  if isinstance(data, list):
+                      for item in data:
+                          vulns.extend(item.get("vulnerabilities", []))
+                          if not base_image and item.get("docker", {}).get("baseImage"):
+                              base_image = item.get("docker", {}).get("baseImage", "")
+                          if item.get("error") and not err_msg:
+                              err_msg = item.get("error")
+                  elif isinstance(data, dict):
+                      vulns = data.get("vulnerabilities", [])
+                      base_image = data.get("docker", {}).get("baseImage", "")
+                      err_msg = data.get("error", "")
+                      if not err_msg and data.get("message"):
+                          err_msg = data.get("message")
+          except Exception as e:
+              err_msg = f"Error reading Snyk JSON: {e}"
+      else:
+          err_msg = "Scan output artifacts/snyk-container-raw.json not found"
+
+      total = len(vulns)
+      if err_msg and total == 0:
+          status = "ERROR"
+          detail = f"Snyk error: {err_msg}"
+      elif total > 0:
+          high_crit = sum(1 for v in vulns if str(v.get("severity", "")).lower() in ["high", "critical"])
+          status = "REVIEW"
+          if high_crit > 0:
+              detail = f"{total} vulnerabilities detected ({high_crit} HIGH/CRITICAL) in container image."
+          else:
+              detail = f"{total} vulnerabilities detected in container image."
+      else:
+          status = "PASS"
+          detail = "No container image vulnerabilities detected."
+
+      summary_data = {
+          "check": "snyk-container",
+          "result": status,
+          "findings": total,
+          "detail": detail
+      }
+      with open("artifacts/snyk-container-summary.json", "w") as f:
+          json.dump(summary_data, f, indent=2)
+
+      rows = []
+      for v in vulns:
+          sev = str(v.get("severity", "info")).lower()
+          title = html.escape(str(v.get("title") or v.get("id") or "Vulnerability"))
+          vuln_id = html.escape(str(v.get("id", "")))
+          pkg_name = str(v.get("packageName") or v.get("name") or "unknown")
+          pkg_ver = str(v.get("version") or "")
+          pkg = html.escape(f"{pkg_name}@{pkg_ver}" if pkg_ver else pkg_name)
+
+          fixed_in = v.get("nearestFixedInVersion") or v.get("fixedIn")
+          if isinstance(fixed_in, list):
+              fixed_str = ", ".join(str(x) for x in fixed_in)
+          elif fixed_in:
+              fixed_str = str(fixed_in)
+          else:
+              fixed_str = "None"
+          fixed_str = html.escape(fixed_str)
+
+          rows.append(f"""<tr>
+            <td><span class="badge {sev}">{sev.upper()}</span></td>
+            <td class="rule">{title} <span style="font-size:11px;color:#94a3b8;">({vuln_id})</span></td>
+            <td class="file">{pkg}</td>
+            <td>{fixed_str}</td>
+          </tr>""")
+
+      rows_html = "".join(rows) if rows else ""
+      if not rows_html:
+          if status == "ERROR":
+              rows_html = f'<tr><td colspan="4" class="no-findings" style="color:#fda4af;">⚠ Snyk container error: {html.escape(err_msg)}</td></tr>'
+          else:
+              rows_html = '<tr><td colspan="4" class="no-findings">✓ No container image vulnerabilities found!</td></tr>'
+
+      base_info = f"Base Image: {html.escape(base_image)} | " if base_image else ""
+      html_doc = f"""<!DOCTYPE html>
+      <html lang="en">
+      <head>
+        <meta charset="UTF-8"><title>Snyk Container Security Report</title>
+        <style>
+          body {{ font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; background: #0f172a; color: #f8fafc; padding: 24px; margin: 0; }}
+          .container {{ max-width: 1200px; margin: 0 auto; }}
+          .header {{ display: flex; justify-content: space-between; align-items: center; margin-bottom: 24px; }}
+          h1 {{ color: #38bdf8; margin: 0; font-size: 24px; }}
+          .back-btn {{ padding: 8px 14px; background: #334155; color: #e2e8f0; text-decoration: none; border-radius: 6px; font-size: 13px; font-weight: 500; }}
+          .card {{ background: #1e293b; border-radius: 8px; padding: 20px; }}
+          table {{ width: 100%; border-collapse: collapse; margin-top: 12px; }}
+          th, td {{ padding: 12px 14px; text-align: left; border-bottom: 1px solid #334155; font-size: 13px; }}
+          th {{ background: #0f172a; color: #94a3b8; text-transform: uppercase; font-size: 11px; }}
+          .badge {{ padding: 3px 8px; border-radius: 4px; font-size: 11px; font-weight: bold; text-transform: uppercase; }}
+          .badge.critical, .badge.high {{ background: #881337; color: #fda4af; }}
+          .badge.medium {{ background: #78350f; color: #fde68a; }}
+          .badge.low, .badge.info {{ background: #1e3a8a; color: #93c5fd; }}
+          .rule {{ font-weight: 600; color: #fbbf24; }}
+          .file {{ font-family: monospace; color: #38bdf8; }}
+          .no-findings {{ text-align: center; padding: 32px; color: #34d399; font-size: 16px; font-weight: bold; }}
+        </style>
+      </head>
+      <body>
+        <div class="container"><div class="card">
+          <div class="header"><h1>🐳 Snyk Container Security Report</h1><a href="security-reports.html" class="back-btn">&larr; Back to Dashboard</a></div>
+          <p style="color:#94a3b8;font-size:14px;">{base_info}Scanned container base image and OS packages for vulnerabilities and security advisories.</p>
+          <table><thead><tr><th>Severity</th><th>Vulnerability</th><th>Package</th><th>Remediation / Fix</th></tr></thead>
+          <tbody>{rows_html}</tbody>
+          </table>
+        </div></div>
+      </body></html>"""
+
+      with open("artifacts/snyk-container.html", "w") as f:
+          f.write(html_doc)
+      print(f"HTML RPT: artifacts/snyk-container.html ({total} findings)")
+      PYEOF
+      fi
+
+      # Shell fallback if python report was not generated
+      if [ ! -f "artifacts/snyk-container-summary.json" ]; then
+        cat > artifacts/snyk-container-summary.json << 'EOF'
+      {
+        "check": "snyk-container",
+        "result": "REVIEW",
+        "findings": 0,
+        "detail": "Container scan completed. Inspect artifacts/snyk-container-raw.json"
+      }
+      EOF
+      fi
+
+      echo ""
+      echo "------------------------------------------------------------"
+      if [ -f "artifacts/snyk-container-summary.json" ]; then
+        cat artifacts/snyk-container-summary.json
+      fi
+      echo "------------------------------------------------------------"
+      echo "HTML RPT: artifacts/snyk-container.html"
+      echo "NOTE    : This check is informational and does not block"
+      echo "          the pipeline."
+      echo "============================================================"
+      echo ""
+
+  artifacts:
+    when: always
+    expire_in: 30 days
+    paths:
+      - artifacts/snyk-container*
+
+
+# ============================================================
+# 6. AGGREGATED REPORT (security-reports.html)
 # ============================================================
 
 security_report:
-  stage: report
+  stage: check
+  allow_failure: true
 
   image: alpine:latest
 
@@ -449,9 +898,16 @@ security_report:
       artifacts: true
     - job: check_code_semgrep
       artifacts: true
+    - job: check_sca_snyk
+      artifacts: true
+    - job: check_container_snyk
+      artifacts: true
 
   script:
     - |
+      set +e
+      mkdir -p artifacts
+
       echo ""
       echo "============================================================"
       echo "               AGGREGATED SECURITY REPORT"
@@ -467,29 +923,67 @@ security_report:
       TRIVY_DET="No data"
       SEMGREP_RES="UNKNOWN"
       SEMGREP_DET="No data"
+      SNYK_RES="UNKNOWN"
+      SNYK_DET="No data"
+      SNYK_CONTAINER_RES="UNKNOWN"
+      SNYK_CONTAINER_DET="No data"
 
       if [ -f "artifacts/gitleaks-summary.json" ]; then
-        GITLEAKS_RES=$(grep -o '"result": "[^"]*"' artifacts/gitleaks-summary.json | cut -d'"' -f4)
-        FND=$(grep -o '"findings": [0-9]*' artifacts/gitleaks-summary.json | awk '{print $2}')
-        GITLEAKS_DET=$(grep -o '"detail": "[^"]*"' artifacts/gitleaks-summary.json | cut -d'"' -f4)
+        GITLEAKS_RES=$(sed -n 's/.*"result": *"\([^"]*\)".*/\1/p' artifacts/gitleaks-summary.json 2>/dev/null || true)
+        FND=$(sed -n 's/.*"findings": *\([0-9]*\).*/\1/p' artifacts/gitleaks-summary.json 2>/dev/null || true)
+        GITLEAKS_DET=$(sed -n 's/.*"detail": *"\([^"]*\)".*/\1/p' artifacts/gitleaks-summary.json 2>/dev/null || true)
+        [ -z "$GITLEAKS_RES" ] && GITLEAKS_RES="UNKNOWN"
+        [ -z "$FND" ] && FND="0"
+        [ -z "$GITLEAKS_DET" ] && GITLEAKS_DET="No data"
         printf "%-20s %-10s %-10s %-30s\n" "GitLeaks" "$GITLEAKS_RES" "$FND" "$GITLEAKS_DET"
       fi
 
       if [ -f "artifacts/trivy-summary.json" ]; then
-        TRIVY_RES=$(grep -o '"result": "[^"]*"' artifacts/trivy-summary.json | cut -d'"' -f4)
-        TRIVY_DET=$(grep -o '"detail": "[^"]*"' artifacts/trivy-summary.json | cut -d'"' -f4)
+        TRIVY_RES=$(sed -n 's/.*"result": *"\([^"]*\)".*/\1/p' artifacts/trivy-summary.json 2>/dev/null || true)
+        TRIVY_DET=$(sed -n 's/.*"detail": *"\([^"]*\)".*/\1/p' artifacts/trivy-summary.json 2>/dev/null || true)
+        [ -z "$TRIVY_RES" ] && TRIVY_RES="UNKNOWN"
+        [ -z "$TRIVY_DET" ] && TRIVY_DET="No data"
         printf "%-20s %-10s %-10s %-30s\n" "Trivy" "$TRIVY_RES" "-" "$TRIVY_DET"
       fi
 
       if [ -f "artifacts/semgrep-summary.json" ]; then
-        SEMGREP_RES=$(grep -o '"result": "[^"]*"' artifacts/semgrep-summary.json | cut -d'"' -f4)
-        FND=$(grep -o '"findings": [0-9]*' artifacts/semgrep-summary.json | awk '{print $2}')
-        SEMGREP_DET=$(grep -o '"detail": "[^"]*"' artifacts/semgrep-summary.json | cut -d'"' -f4)
+        SEMGREP_RES=$(sed -n 's/.*"result": *"\([^"]*\)".*/\1/p' artifacts/semgrep-summary.json 2>/dev/null || true)
+        FND=$(sed -n 's/.*"findings": *\([0-9]*\).*/\1/p' artifacts/semgrep-summary.json 2>/dev/null || true)
+        SEMGREP_DET=$(sed -n 's/.*"detail": *"\([^"]*\)".*/\1/p' artifacts/semgrep-summary.json 2>/dev/null || true)
+        [ -z "$SEMGREP_RES" ] && SEMGREP_RES="UNKNOWN"
+        [ -z "$FND" ] && FND="0"
+        [ -z "$SEMGREP_DET" ] && SEMGREP_DET="No data"
         printf "%-20s %-10s %-10s %-30s\n" "Semgrep" "$SEMGREP_RES" "$FND" "$SEMGREP_DET"
+      fi
+
+      if [ -f "artifacts/snyk-summary.json" ]; then
+        SNYK_RES=$(sed -n 's/.*"result": *"\([^"]*\)".*/\1/p' artifacts/snyk-summary.json 2>/dev/null || true)
+        FND=$(sed -n 's/.*"findings": *\([0-9]*\).*/\1/p' artifacts/snyk-summary.json 2>/dev/null || true)
+        SNYK_DET=$(sed -n 's/.*"detail": *"\([^"]*\)".*/\1/p' artifacts/snyk-summary.json 2>/dev/null || true)
+        [ -z "$SNYK_RES" ] && SNYK_RES="UNKNOWN"
+        [ -z "$FND" ] && FND="0"
+        [ -z "$SNYK_DET" ] && SNYK_DET="No data"
+        printf "%-20s %-10s %-10s %-30s\n" "Snyk" "$SNYK_RES" "$FND" "$SNYK_DET"
+      fi
+
+      if [ -f "artifacts/snyk-container-summary.json" ]; then
+        SNYK_CONTAINER_RES=$(sed -n 's/.*"result": *"\([^"]*\)".*/\1/p' artifacts/snyk-container-summary.json 2>/dev/null || true)
+        FND=$(sed -n 's/.*"findings": *\([0-9]*\).*/\1/p' artifacts/snyk-container-summary.json 2>/dev/null || true)
+        SNYK_CONTAINER_DET=$(sed -n 's/.*"detail": *"\([^"]*\)".*/\1/p' artifacts/snyk-container-summary.json 2>/dev/null || true)
+        [ -z "$SNYK_CONTAINER_RES" ] && SNYK_CONTAINER_RES="UNKNOWN"
+        [ -z "$FND" ] && FND="0"
+        [ -z "$SNYK_CONTAINER_DET" ] && SNYK_CONTAINER_DET="No data"
+        printf "%-20s %-10s %-10s %-30s\n" "Snyk Container" "$SNYK_CONTAINER_RES" "$FND" "$SNYK_CONTAINER_DET"
       fi
 
       echo "--------------------------------------------------------------------------------"
       echo ""
+
+      GITLEAKS_BADGE=$(echo "$GITLEAKS_RES" | tr '[:upper:]' '[:lower:]')
+      TRIVY_BADGE=$(echo "$TRIVY_RES" | tr '[:upper:]' '[:lower:]')
+      SEMGREP_BADGE=$(echo "$SEMGREP_RES" | tr '[:upper:]' '[:lower:]')
+      SNYK_BADGE=$(echo "$SNYK_RES" | tr '[:upper:]' '[:lower:]')
+      SNYK_CONTAINER_BADGE=$(echo "$SNYK_CONTAINER_RES" | tr '[:upper:]' '[:lower:]')
 
       # Generate unified security-reports.html dashboard
       cat > artifacts/security-reports.html << EOF
@@ -500,7 +994,7 @@ security_report:
         <title>Security Analysis Dashboard - $CI_PROJECT_NAME</title>
         <style>
           body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; background: #0b1120; color: #f8fafc; padding: 32px; margin: 0; }
-          .container { max-width: 1100px; margin: 0 auto; }
+          .container { max-width: 1200px; margin: 0 auto; }
           h1 { color: #38bdf8; margin-bottom: 6px; }
           p.meta { color: #94a3b8; font-size: 14px; margin-bottom: 28px; }
           .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(320px, 1fr)); gap: 20px; }
@@ -509,6 +1003,8 @@ security_report:
           .badge { padding: 4px 10px; border-radius: 6px; font-size: 12px; font-weight: bold; }
           .badge.pass { background: #065f46; color: #34d399; }
           .badge.review { background: #881337; color: #fda4af; }
+          .badge.error { background: #881337; color: #fda4af; }
+          .badge.skipped { background: #334155; color: #94a3b8; }
           .detail { color: #cbd5e1; font-size: 14px; margin: 16px 0 24px 0; min-height: 40px; }
           .btn { display: inline-block; padding: 10px 16px; background: #0284c7; color: white; text-decoration: none; border-radius: 6px; font-weight: 500; font-size: 13px; }
           .btn:hover { background: #0369a1; }
@@ -520,19 +1016,29 @@ security_report:
           <p class="meta">Project: $CI_PROJECT_NAME | Commit: $CI_COMMIT_SHORT_SHA | Branch: $CI_COMMIT_REF_NAME</p>
           <div class="grid">
             <div class="card">
-              <h2>GitLeaks Secret Scan <span class="badge \$(echo $GITLEAKS_RES | tr '[:upper:]' '[:lower:]')">$GITLEAKS_RES</span></h2>
+              <h2>GitLeaks Secret Scan <span class="badge $GITLEAKS_BADGE">$GITLEAKS_RES</span></h2>
               <p class="detail">$GITLEAKS_DET</p>
               <a class="btn" href="gitleaks.html">Open GitLeaks HTML Report &rarr;</a>
             </div>
             <div class="card">
-              <h2>Trivy SAST & Vuln <span class="badge \$(echo $TRIVY_RES | tr '[:upper:]' '[:lower:]')">$TRIVY_RES</span></h2>
+              <h2>Trivy SAST & Vuln <span class="badge $TRIVY_BADGE">$TRIVY_RES</span></h2>
               <p class="detail">$TRIVY_DET</p>
               <a class="btn" href="trivy.html">Open Trivy HTML Report &rarr;</a>
             </div>
             <div class="card">
-              <h2>Semgrep Code Scan <span class="badge \$(echo $SEMGREP_RES | tr '[:upper:]' '[:lower:]')">$SEMGREP_RES</span></h2>
+              <h2>Semgrep Code Scan <span class="badge $SEMGREP_BADGE">$SEMGREP_RES</span></h2>
               <p class="detail">$SEMGREP_DET</p>
               <a class="btn" href="semgrep.html">Open Semgrep HTML Report &rarr;</a>
+            </div>
+            <div class="card">
+              <h2>Snyk SCA Dependencies <span class="badge $SNYK_BADGE">$SNYK_RES</span></h2>
+              <p class="detail">$SNYK_DET</p>
+              <a class="btn" href="snyk.html">Open Snyk HTML Report &rarr;</a>
+            </div>
+            <div class="card">
+              <h2>Snyk Container <span class="badge $SNYK_CONTAINER_BADGE">$SNYK_CONTAINER_RES</span></h2>
+              <p class="detail">$SNYK_CONTAINER_DET</p>
+              <a class="btn" href="snyk-container.html">Open Snyk Container Report &rarr;</a>
             </div>
           </div>
         </div>
@@ -555,7 +1061,6 @@ security_report:
 # ============================================================
 # NOTE: The following scanners are temporarily disabled / OFF:
 # - Bandit (Python AST Linter)
-# - Snyk Open Source (SCA)
-# - Snyk Container (Container Image Vulnerabilities)
 # - Hadolint (Dockerfile Linting)
 # ============================================================
+

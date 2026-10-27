@@ -1,6 +1,5 @@
 stages:
-  - security_scan
-  - report
+  - check
   - build
   - deploy
   - verify
